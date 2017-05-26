@@ -15,7 +15,7 @@ setup(
     include_package_data=True,
     zip_safe=False,
     install_requires=[
-        'django>=1.6.3',
+        'django>=1.5.4',
         'uuid>=1.30',
         'pytz>=2017.2',
     ],
