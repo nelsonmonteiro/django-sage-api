@@ -10,6 +10,7 @@ import base64
 import requests
 import hashlib
 import hmac
+import urlparse
 from collections import OrderedDict
 from uuid import uuid4
 from django.db import models
@@ -27,6 +28,10 @@ class Sage(models.Model):
     """
     Model to connect and save tokens from SAGE API related with a specific user.
     """
+    class Meta:
+        verbose_name = 'Sage account'
+        verbose_name_plural = 'Sage accounts'
+
     user = models.OneToOneField(settings.AUTH_USER_MODEL, related_name='sage')
     access_token_key = models.CharField(max_length=2048, blank=True, null=True)
     access_token_type = models.CharField(max_length=20)
@@ -54,7 +59,7 @@ class Sage(models.Model):
         return '%s?%s' % (sage_settings.AUTH_URL, urlencode(params))
 
     @classmethod
-    def create_for_user(cls, user, state_code, auth_code):
+    def create_for_user(cls, user, auth_code, state_code):
         """
         Create a Sage model for an user and generates the first access token.
         Verify if the state code is valid to protect from attacks.
@@ -64,7 +69,7 @@ class Sage(models.Model):
             state_code.delete()
             sage_auth, created = cls.objects.get_or_create(user=user)
             sage_auth.__get_access_token(auth_code)
-        except AuthStateCode.DoesNotExit:
+        except AuthStateCode.DoesNotExist:
             raise PermissionDenied('State code is invalid for this user')
 
     def __set_access_token(self, response):
@@ -106,10 +111,8 @@ class Sage(models.Model):
             'refresh_token': self.refresh_token,
         })
 
-        authorization = base64.b64encode('%s:%s' % (self.SAGE_CLIENT_ID, self.SAGE_SECRET_KEY))
-        request = requests.post('%s%s' % (
-            self.SAGE_AUTH_BASE_URL,
-            self.SAGE_GET_ACCESS_TOKEN_AUTH_URL), params, headers={
+        authorization = base64.b64encode('%s:%s' % (sage_settings.CLIENT_ID, sage_settings.SECRET_KEY))
+        request = requests.post(sage_settings.ACCESS_TOKEN_URL, params, headers={
                 'Authorization': 'Basic %s' % authorization,
                 'ContentType': 'application/x-www-form-urlencoded;charset=UTF-8',
         })
@@ -127,7 +130,7 @@ class Sage(models.Model):
                 self.__refresh_access_token()
             else:
                 return None
-        return self.sage_access_token
+        return self.access_token_key
 
     def __get_signature(self, url, params, data, method, nonce):
         """
@@ -139,26 +142,26 @@ class Sage(models.Model):
         ordered_params = OrderedDict(sorted(params.items()))
         encoded_params = quote(urlencode(ordered_params), safe='')
 
-        signing_key = '%s&%s' % (self.SAGE_SIGNING_KEY_PRIMARY, self.access_token)
         raw_string = '%s&%s&%s&%s' % (method, quote(url.lower(), safe=''), encoded_params, nonce)
-        signature = hmac.new(signing_key, raw_string, hashlib.sha1).digest().encode('base64').rstrip('\n')
+        signing_key = '%s&%s' % (quote(sage_settings.SIGNING_KEY, safe=''), quote(self.access_token, safe=''))
 
-        print raw_string, signature
+        signature = hmac.new(signing_key, raw_string, hashlib.sha1).digest().encode('base64').rstrip('\n')
         return signature
 
-    def __get_headers(self, url, params, data, method):
+    def __get_headers(self, url, params, data, method, site_id=None, company_id=None):
         """
         Return the API request's headers already with signature.
         """
         nonce = str(uuid4().hex)
         return {
-            'Authorization': '%s %s' % (self.access_token_type, self.access_token),
-            'ocp-apim-subscription-key': self.SAGE_SUBSCRIPTION_KEY_PRIMARY,
-            'X-Site': self.SAGE_SITE_ID,
-            'X-Company': self.SAGE_COMPANY_ID,
-            'X-Signature': self.__get_signature(url, params, data, nonce, method),
+            'Authorization': '%s %s' % (self.access_token_type.capitalize(), self.access_token),
+            'ocp-apim-subscription-key': sage_settings.SUBSCRIPTION_KEY,
+            'X-Site': site_id or '',
+            'X-Company': company_id or '',
+            'X-Signature': self.__get_signature(url, params, data, method, nonce),
             'X-Nonce': nonce,
-            'Content-Type': 'application/json; charset=utf-8',
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
         }
 
     @staticmethod
@@ -166,71 +169,93 @@ class Sage(models.Model):
         """
         Return the absolute url for a API call.
         """
-        if relative_url[0] == '/':
-            return '%s%s' % (sage_settings.API_URL, relative_url)
-        return '%s/%s' % (sage_settings.API_URL, relative_url)
+        return urlparse.urljoin(sage_settings.API_URL, relative_url)
 
-    def api_get(self, relative_url, params=None):
+    @staticmethod
+    def __clean_response(response):
+        if response.status_code != 200:
+            error_msg = """
+            STATUS_CODE: 
+            %(status_code)s
+            
+            URL: 
+            %(url)s
+            
+            REQUEST HEADERS:
+            %(request_headers)s
+            
+            REQUEST BODY: 
+            %(request_body)s
+            
+            RESPONSE HEADERS:
+            %(response_headers)s
+            
+            RESPONSE BODY:
+            %(response_body)s
+            
+            """ % {
+                'status_code': response.status_code,
+                'url':  response.request.url,
+                'request_headers': response.request.headers,
+                'request_body': response.request.body,
+                'response_headers': response.headers,
+                'response_body': response.content,
+            }
+            raise Exception(error_msg)
+        return response.json()
+
+    def api_get(self, relative_url, params=None, site_id=None, company_id=None):
         """
         Make an API GET request.
         """
         url = self.__get_absolute_url(relative_url)
         params = params or {}
-        headers = self.__get_headers(url, params or {}, {}, 'GET')
+        headers = self.__get_headers(url, params or {}, {}, 'GET', site_id, company_id)
         if params:
             url = '%s?%s' % (url, urlencode(params))
         response = requests.get(url, headers=headers)
+        return self.__clean_response(response)
 
-        print '%s: %s' % (response.status_code, url)
-        print response.content
-        return response.json()
-
-    def api_post(self, relative_url, params=None, data=None):
+    def api_post(self, relative_url, params=None, data=None, site_id=None, company_id=None):
         """
         Make an API POST request.
         """
         url = self.__get_absolute_url(relative_url)
         params = params or {}
         data = data or {}
-        headers = self.__get_headers(url, params, data, 'POST')
+        headers = self.__get_headers(url, params, data, 'POST', site_id, company_id)
         if params:
             url = '%s?%s' % (url, urlencode(params))
         response = requests.post(url, json.dumps(data), headers=headers)
+        return self.__clean_response(response)
 
-        print '%s: %s' % (response.status_code, url)
-        print response.content
-        return response.json()
-
-    def api_put(self, relative_url, params=None, data=None):
+    def api_put(self, relative_url, params=None, data=None, site_id=None, company_id=None):
         """
         Make an API PUT request.
         """
         url = self.__get_absolute_url(relative_url)
         params = params or {}
         data = data or {}
-        headers = self.__get_headers(url, params or {}, data, 'PUT')
+        headers = self.__get_headers(url, params or {}, data, 'PUT', site_id, company_id)
         if params:
             url = '%s?%s' % (url, urlencode(params))
         response = requests.put(url, json.dumps(data), headers=headers)
+        return self.__clean_response(response)
 
-        print '%s: %s' % (response.status_code, url)
-        print response.content
-        return response.json()
-
-    def api_delete(self, relative_url, params=None):
+    def api_delete(self, relative_url, params=None, site_id=None, company_id=None):
         """
         Make an API DELETE request.
         """
         url = self.__get_absolute_url(relative_url)
         params = params or {}
-        headers = self.__get_headers(url, params, {}, 'DELETE')
+        headers = self.__get_headers(url, params, {}, 'DELETE', site_id, company_id)
         if params:
             url = '%s?%s' % (url, urlencode(params))
         response = requests.delete(url, headers=headers)
+        return self.__clean_response(response)
 
-        print '%s: %s' % (response.status_code, url)
-        print response.content
-        return response.json()
+    def get_sites(self):
+        return self.api_get('accounts/v1/sites')
 
 
 @python_2_unicode_compatible

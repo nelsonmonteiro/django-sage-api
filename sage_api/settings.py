@@ -25,10 +25,11 @@ class SageSettings(object):
         Return the settings value from settings.py if exist, otherwise return the default value.
         For the settings that is required to define in the settings file, throws and error if they are not found.
         """
-        setting = getattr(self.__settings, name, self.DEFAULT_SETTINGS.get(name, None))
+        setting = self.__settings.get(name, self.DEFAULT_SETTINGS.get(name, None))
         if not setting:
             from django.core.exceptions import ImproperlyConfigured
             raise ImproperlyConfigured('%s must be defined in SAGE_SETTINGS' % name)
+        return setting
 
     @property
     def AUTH_URL(self):
@@ -74,8 +75,8 @@ class SageSettings(object):
         return self._get_setting('SUBSCRIPTION_KEY')
 
     @property
-    def SIDE_ID(self):
-        return self._get_setting('SIDE_ID')
+    def SITE_ID(self):
+        return self._get_setting('SITE_ID')
 
     @property
     def COMPANY_ID(self):
