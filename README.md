@@ -44,8 +44,6 @@ SAGE_SETTINGS = {
     'API_URL': 'https://api.columbus.sage.com/uk/sage200',
     'SIGNING_KEY': '{{SIGNING_KEY}}',
     'SUBSCRIPTION_KEY': '{{SIGNING_KEY}}',
-    'SITE_ID': '{{SITE_ID}}',
-    'COMPANY_ID': {{COMPANY_ID}},
 }
 ```
 
@@ -68,10 +66,6 @@ SAGE_SETTINGS = {
 *SIGNING_KEY*: Your key to sign the requests.
 
 *SUBSCRIPTION_KEY*: Your unique developer subscription key.
-
-*SITE_ID*: Site or Tenant ID where calls are made.
-
-*COMPANY_ID*: Company Data Set ID Base where calls are made.
 
 
 
